@@ -11,19 +11,32 @@ Scheduling notes:
   * schedule 0 19 * * 1-5 (IST) runs on weekday evenings, after the Indian
     market has closed and Yahoo Finance has published the day's final bar.
   * catchup=False because the ingestion script always fetches a trailing window
-    based on today's date. Replaying old logical dates would add no data.
+    based on today's date. Replaying old logical dates would add no data;
+    reprocessing history is done through the backfill params below instead,
+    which is a single run over a range rather than one run per past day.
   * max_active_runs=1 prevents two runs writing the same rows concurrently.
   * notify_on_failure uses trigger_rule=ONE_FAILED so it fires if any upstream
     task fails, but is skipped when everything succeeds.
+
+Backfilling a past period ("Trigger DAG w/ config" in the UI, or the CLI):
+
+    airflow dags trigger marketpulse_daily_pipeline \
+        --conf '{"start": "2025-01-01", "end": "2025-03-31"}'
+
+Leave the params empty for the normal daily window. A backfill re-runs the whole
+DAG, so dbt rebuilds and the quality gate re-validates the reprocessed range.
 """
 
 from datetime import datetime, timedelta
 
+
 import pendulum
 from airflow import DAG
+from airflow.models.param import Param
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from airflow.utils.trigger_rule import TriggerRule
+
 
 import fetch_data
 import quality_checks
@@ -42,9 +55,36 @@ default_args = {
 DBT_DIR = "/opt/airflow/dbt_marketpulse"
 
 
+def _param(context, name):
+    """
+    Read a run param, treating a blank string as absent.
+
+    The UI sends "" for a text field the operator left alone, and passing that
+    through would look like an explicit request rather than a default, so it is
+    normalised to None here.
+    """
+    value = (context.get("params") or {}).get(name)
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
 def task_fetch_data(**context):
-    """Extract from yfinance into the raw zone, then share the batch_id."""
-    summary = fetch_data.run()
+    """
+    Extract from yfinance into the raw zone, then share the batch_id.
+
+    With no params this fetches the normal daily window. With start/end it
+    reprocesses that range instead, which is the backfill path.
+    """
+    start = _param(context, "start")
+    end = _param(context, "end")
+    symbols = _param(context, "symbols")
+
+    if start or end:
+        print(f"Backfill requested: start={start} end={end} symbols={symbols or 'all'}")
+
+    summary = fetch_data.run(start=start, end=end, symbols=symbols)
     # XCom lets the quality-check task tag its results with the same batch_id.
     context["ti"].xcom_push(key="batch_id", value=summary["batch_id"])
     return summary
@@ -67,6 +107,10 @@ def task_pipeline_summary(**context):
     print(f"ingest status  : {ingest.get('status')}")
     print(f"symbols ok     : {ingest.get('symbols_ok')}")
     print(f"symbols failed : {ingest.get('symbols_failed')}")
+    print(f"mode           : {ingest.get('mode')}")
+    print(
+        f"window         : {ingest.get('window_start')} -> {ingest.get('window_end')}"
+    )
     print(f"rows upserted  : {ingest.get('rows_inserted')}")
     print(f"checks passed  : {checks.get('passed')}/{checks.get('total')}")
     print(f"check warnings : {checks.get('warnings')}")
@@ -108,6 +152,31 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     tags=["marketpulse", "stocks", "etl"],
+    # Exposed as form fields under "Trigger DAG w/ config", so a backfill is a
+    # normal operator action rather than an edit to the pipeline code.
+    params={
+        "start": Param(
+            default="",
+            type="string",
+            title="Backfill start date",
+            description="YYYY-MM-DD. Leave blank for the normal daily window.",
+        ),
+        "end": Param(
+            default="",
+            type="string",
+            title="Backfill end date (inclusive)",
+            description="YYYY-MM-DD. Defaults to today when a start is given.",
+        ),
+        "symbols": Param(
+            default="",
+            type="string",
+            title="Symbols",
+            description=(
+                "Comma-separated subset, e.g. TCS.NS,INFY.NS. "
+                "Blank means every configured symbol."
+            ),
+        ),
+    },
 ) as dag:
 
     fetch = PythonOperator(

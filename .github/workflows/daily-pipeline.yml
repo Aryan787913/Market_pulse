@@ -41,6 +41,19 @@ on:
         description: "Fetch full history instead of the usual short window"
         type: boolean
         default: false
+      start:
+        description: "Backfill a specific range: first trade date (YYYY-MM-DD)"
+        type: string
+        default: ""
+      end:
+        description: "Backfill a specific range: last trade date, inclusive (YYYY-MM-DD)"
+        type: string
+        default: ""
+      symbols:
+        description: "Limit the backfill to these symbols (comma separated, blank = all)"
+        type: string
+        default: ""
+
 
 # Never let a scheduled run and a manual run write concurrently.
 concurrency:
@@ -131,7 +144,21 @@ jobs:
       # --- DAG task: fetch_data -------------------------------------------
       - name: Fetch market data into the raw zone
         id: fetch
-        run: python -m data_pipeline.fetch_data
+        # The dispatch inputs are read through env, not interpolated into the
+        # command line: ${{ }} would paste an operator's text straight into the
+        # shell, so a value containing ; or $( ) would execute. As env vars they
+        # are only ever data, and fetch_data.py rejects anything that is not a
+        # valid date or a known symbol before it downloads anything.
+        env:
+          BACKFILL_START: ${{ inputs.start }}
+          BACKFILL_END: ${{ inputs.end }}
+          BACKFILL_SYMBOLS: ${{ inputs.symbols }}
+        run: |
+          args=()
+          if [ -n "$BACKFILL_START" ]; then args+=(--start "$BACKFILL_START"); fi
+          if [ -n "$BACKFILL_END" ]; then args+=(--end "$BACKFILL_END"); fi
+          if [ -n "$BACKFILL_SYMBOLS" ]; then args+=(--symbols "$BACKFILL_SYMBOLS"); fi
+          python -m data_pipeline.fetch_data "${args[@]}"
 
       # --- DAG task: run_dbt_models ---------------------------------------
       - name: Build dbt models and run their tests

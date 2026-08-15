@@ -5,18 +5,26 @@ raw zone.
 Design decisions worth remembering for the viva:
   * The first run backfills a year of history; later runs only fetch a small
     overlapping window. This keeps the daily job fast.
+  * An explicit --start/--end window overrides that automatic choice, which is
+    what makes targeted reprocessing of a past period possible.
   * A failure on one symbol never kills the whole run. Failures are counted and
     the run is marked PARTIAL, or FAILED if too many symbols break.
   * Every row carries a batch_id so any bad load can be traced or reverted.
 
-Run standalone:  python data_pipeline/fetch_data.py
+Run standalone:
+    python data_pipeline/fetch_data.py
+    python data_pipeline/fetch_data.py --start 2025-01-01 --end 2025-03-31
+    python data_pipeline/fetch_data.py --start 2025-01-01 --symbols TCS.NS,INFY.NS
 """
 
+import argparse
 import logging
 import sys
 import time
 import uuid
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+
 
 import pandas as pd
 import yfinance as yf
@@ -145,34 +153,189 @@ def _normalise(frame: pd.DataFrame, symbol: str, batch_id: str) -> list[tuple]:
     return rows
 
 
-def run() -> dict:
+# ---------------------------------------------------------------------------
+# Window resolution
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class IngestionWindow:
+    """
+    The date range a run will fetch, plus how that range was decided.
+
+    `end` is the exclusive bound that yfinance expects, so it always sits one day
+    past the last date actually wanted. Keeping the exclusivity inside this
+    object means the callers and the tests reason about one convention only.
+    """
+
+    start: date
+    end: date
+    mode: str
+
+    @property
+    def last_date(self) -> date:
+        """The newest trade date this window can return (inclusive)."""
+        return self.end - timedelta(days=1)
+
+    def describe(self) -> str:
+        return f"{self.mode} {self.start} -> {self.last_date}"
+
+
+def _parse_day(value: str | date | None, label: str) -> date | None:
+    """Accept a date, an ISO string, or None. Reject anything else loudly."""
+    if value is None or isinstance(value, date):
+        return value
+    try:
+        return datetime.strptime(str(value).strip(), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(
+            f"{label} must be an ISO date such as 2025-01-31, got {value!r}"
+        ) from exc
+
+
+def resolve_window(
+    start=None,
+    end=None,
+    today: date | None = None,
+    raw_is_empty: bool | None = None,
+) -> IngestionWindow:
+    """
+    Decide which dates to fetch.
+
+    Three modes, in order of precedence:
+
+      BACKFILL_RANGE  an explicit start and/or end was supplied, so the caller
+                      is reprocessing a specific historical period. A missing
+                      end defaults to today, and a missing start defaults to
+                      BACKFILL_DAYS before the end.
+      BACKFILL        the landing zone is empty, so a first load pulls a long
+                      history to give the moving-average windows enough data.
+      INCREMENTAL     the normal daily case: a short overlapping window, which
+                      is cheap and still catches late source corrections.
+
+    `today` and `raw_is_empty` are injectable so the decision can be tested
+    without a clock or a database.
+    """
+    today = today or date.today()
+    start_day = _parse_day(start, "start")
+    end_day = _parse_day(end, "end")
+
+    if start_day is not None or end_day is not None:
+        # Explicit range. Guard the ordering before any network calls happen.
+        effective_end = end_day or today
+        effective_start = start_day or effective_end - timedelta(days=BACKFILL_DAYS)
+
+        # The future check comes first on purpose. When only a start is given,
+        # end defaults to today, so a future start also looks like a reversed
+        # range - and "your start is in the future" is the more useful message.
+        if effective_start > today:
+            raise ValueError(
+                f"start {effective_start} is in the future; no data can exist yet"
+            )
+        if effective_start > effective_end:
+            raise ValueError(
+                f"start {effective_start} is after end {effective_end}"
+            )
+        # Asking beyond today would silently return nothing, so it is clamped.
+        effective_end = min(effective_end, today)
+
+        return IngestionWindow(
+            start=effective_start,
+            end=effective_end + timedelta(days=1),
+            mode="BACKFILL_RANGE",
+        )
+
+    if raw_is_empty is None:
+        raw_is_empty = db.raw_table_is_empty()
+
+    lookback = BACKFILL_DAYS if raw_is_empty else INCREMENTAL_DAYS
+    return IngestionWindow(
+        start=today - timedelta(days=lookback),
+        end=today + timedelta(days=1),
+        mode="BACKFILL" if raw_is_empty else "INCREMENTAL",
+    )
+
+
+def resolve_symbols(symbols=None) -> list[str]:
+    """
+    Validate a symbol subset against the configured universe.
+
+    Restricting a backfill to a few tickers is the common case when one symbol
+    was mis-loaded, and rejecting unknown symbols here prevents a typo from
+    quietly fetching nothing.
+    """
+    if not symbols:
+        return list(STOCK_SYMBOLS)
+
+    if isinstance(symbols, str):
+        symbols = [part for part in symbols.split(",") if part.strip()]
+
+    requested = [str(s).strip().upper() for s in symbols]
+    known = {s.upper(): s for s in STOCK_SYMBOLS}
+
+    unknown = [s for s in requested if s not in known]
+    if unknown:
+        raise ValueError(
+            f"unknown symbols {unknown}; configured universe is {STOCK_SYMBOLS}"
+        )
+
+    # De-duplicate while preserving the caller's order.
+    seen, resolved = set(), []
+    for symbol in requested:
+        if symbol not in seen:
+            seen.add(symbol)
+            resolved.append(known[symbol])
+    return resolved
+
+
+def classify_status(symbols_failed: int, symbols_total: int) -> str:
+    """
+    Grade a run: all symbols fine, a tolerable few missing, or too many broken.
+
+    Split out from run() so the threshold is testable without any I/O.
+    """
+    if symbols_total == 0:
+        return "FAILED"
+    if symbols_failed == 0:
+        return "SUCCESS"
+    if symbols_failed / symbols_total > MAX_FAILURE_RATIO:
+        return "FAILED"
+    return "PARTIAL"
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def run(start=None, end=None, symbols=None) -> dict:
     """
     Execute the full extract-and-land step.
     Returns a summary dict, which Airflow pushes to XCom for later tasks.
+
+    Passing start/end reprocesses a historical range instead of the automatic
+    daily window. This is safe to repeat: the raw upsert is keyed on
+    (symbol, trade_date), so a backfill overwrites the days it covers rather
+    than duplicating them.
     """
     batch_id = str(uuid.uuid4())
-    end_date = date.today() + timedelta(days=1)  # yfinance 'end' is exclusive
-
-    first_run = db.raw_table_is_empty()
-    lookback = BACKFILL_DAYS if first_run else INCREMENTAL_DAYS
-    start_date = date.today() - timedelta(days=lookback)
+    window = resolve_window(start=start, end=end)
+    target_symbols = resolve_symbols(symbols)
 
     logger.info(
         "Batch %s | mode=%s | window %s -> %s | %s symbols",
         batch_id,
-        "BACKFILL" if first_run else "INCREMENTAL",
-        start_date,
-        end_date,
-        len(STOCK_SYMBOLS),
+        window.mode,
+        window.start,
+        window.last_date,
+        len(target_symbols),
     )
 
-    log_id = db.start_ingestion_log(batch_id, len(STOCK_SYMBOLS))
+    log_id = db.start_ingestion_log(batch_id, len(target_symbols))
 
     all_rows: list[tuple] = []
     ok, failed, failures = 0, 0, []
 
-    for symbol in STOCK_SYMBOLS:
-        frame = _download_with_retry(symbol, start_date, end_date)
+    for symbol in target_symbols:
+        frame = _download_with_retry(symbol, window.start, window.end)
         rows = _normalise(frame, symbol, batch_id)
 
         if rows:
@@ -186,20 +349,24 @@ def run() -> dict:
 
     inserted = db.insert_raw_prices(all_rows) if all_rows else 0
 
-    failure_ratio = failed / len(STOCK_SYMBOLS) if STOCK_SYMBOLS else 1.0
-    if failed == 0:
-        status = "SUCCESS"
-    elif failure_ratio > MAX_FAILURE_RATIO:
-        status = "FAILED"
-    else:
-        status = "PARTIAL"
+    status = classify_status(failed, len(target_symbols))
 
-    message = f"failed symbols: {', '.join(failures)}" if failures else "all symbols ok"
+    # The window is recorded alongside the failures so the run history shows
+    # which period each batch covered, not just when it happened.
+    detail = f"window {window.describe()}"
+    message = (
+        f"{detail}; failed symbols: {', '.join(failures)}"
+        if failures
+        else f"{detail}; all symbols ok"
+    )
     db.finish_ingestion_log(log_id, ok, failed, inserted, status, message)
 
     summary = {
         "batch_id": batch_id,
         "status": status,
+        "mode": window.mode,
+        "window_start": window.start.isoformat(),
+        "window_end": window.last_date.isoformat(),
         "symbols_ok": ok,
         "symbols_failed": failed,
         "rows_inserted": inserted,
@@ -209,16 +376,36 @@ def run() -> dict:
     # Raising here makes the Airflow task go red, which triggers the alert task.
     if status == "FAILED":
         raise RuntimeError(
-            f"Ingestion failed: {failed}/{len(STOCK_SYMBOLS)} symbols "
+            f"Ingestion failed: {failed}/{len(target_symbols)} symbols "
             f"could not be fetched ({message})"
         )
 
     return summary
 
 
+def _parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Fetch daily OHLCV data into the raw zone.",
+        epilog=(
+            "Omit --start and --end for the normal daily window. "
+            "Re-running a range is safe; rows are upserted, never duplicated."
+        ),
+    )
+    parser.add_argument("--start", help="first trade date to fetch (YYYY-MM-DD)")
+    parser.add_argument(
+        "--end", help="last trade date to fetch, inclusive (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--symbols",
+        help="comma-separated subset of the configured universe, e.g. TCS.NS,INFY.NS",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    args = _parse_args()
     try:
-        run()
+        run(start=args.start, end=args.end, symbols=args.symbols)
     except Exception:
         logger.exception("fetch_data terminated with an error")
         sys.exit(1)
