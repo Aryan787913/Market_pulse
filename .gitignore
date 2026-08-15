@@ -20,6 +20,10 @@ npm-debug.log*
 .env.local
 !.env.example
 
+# Local scratch notes where credentials get pasted while setting things up
+google auth.txt
+*credentials*.txt
+
 # dbt build artefacts
 dbt_marketpulse/target/
 dbt_marketpulse/dbt_packages/
