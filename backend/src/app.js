@@ -35,19 +35,47 @@ const app = express();
 // Sets X-Frame-Options, X-Content-Type-Options, HSTS and friends.
 app.use(helmet());
 
-// Browsers may only call this API from the configured origins.
-app.use(
-  cors({
-    origin(origin, callback) {
-      // No origin header means a non-browser client (curl, Postman, tests).
-      if (!origin || corsOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error(`Origin not allowed by CORS: ${origin}`));
-    },
-    credentials: true,
-  })
-);
+/**
+ * Decides per request whether the caller's origin may use the API.
+ *
+ * The delegate form of cors() is used instead of a plain origin list because the
+ * decision needs the request itself: on Vercel the frontend and the API share a
+ * domain, and that domain is not known ahead of time. A deployment answers on
+ * its production alias, on a per-deployment preview URL and on any custom
+ * domain, so comparing the Origin against the Host the request arrived on
+ * accepts all of them without any of them being configured.
+ *
+ * A rejected origin is answered without CORS headers rather than by throwing.
+ * Throwing reached the error handler and produced a 500, which made an ordinary
+ * cross-origin call look like a server fault; omitting the headers is what the
+ * browser expects and lets the real status code through.
+ */
+function corsDelegate(req, callback) {
+  const { origin, host } = { origin: req.headers.origin, host: req.headers.host };
+
+  // No Origin header means a non-browser client: curl, Postman, tests.
+  if (!origin) {
+    return callback(null, { origin: true, credentials: true });
+  }
+
+  let sameOrigin = false;
+  try {
+    sameOrigin = Boolean(host) && new URL(origin).host === host;
+  } catch {
+    // A malformed Origin header is treated as untrusted rather than crashing.
+    sameOrigin = false;
+  }
+
+  if (sameOrigin || corsOrigins.includes(origin)) {
+    return callback(null, { origin: true, credentials: true });
+  }
+
+  return callback(null, { origin: false });
+}
+
+// Browsers may only call this API from the same domain or a configured origin.
+app.use(cors(corsDelegate));
+
 
 // Blanket limit: 200 requests per IP per 15 minutes across the whole API.
 // Login has its own stricter limiter in routes/auth.js.
