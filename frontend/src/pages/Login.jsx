@@ -13,10 +13,12 @@
 import { useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 
+import GoogleSignInButton from "../components/GoogleSignInButton";
 import { useAuth } from "../context/AuthContext";
 
 export default function Login() {
   const { login, isAuthenticated } = useAuth();
+
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -92,9 +94,18 @@ export default function Login() {
           {submitting ? "Signing in…" : "Sign in"}
         </button>
 
+        {/* Renders nothing unless the server has a Google client ID configured.
+            On success the context already holds the user, so this only has to
+            move the user off the login page. */}
+        <GoogleSignInButton
+          onSuccess={() => navigate(location.state?.from || "/", { replace: true })}
+          onError={setError}
+        />
+
         <p className="auth-footer">
           New here? <Link to="/register">Create an account</Link>
         </p>
+
       </form>
     </div>
   );

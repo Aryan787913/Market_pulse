@@ -76,7 +76,13 @@ export const authApi = {
   register: (payload) => api.post("/auth/register", payload).then((r) => r.data),
   login: (payload) => api.post("/auth/login", payload).then((r) => r.data),
   me: () => api.get("/auth/me").then((r) => r.data),
+  // `credential` is the ID token Google's script hands back. The server verifies
+  // it; the browser only relays it.
+  google: (credential) => api.post("/auth/google", { credential }).then((r) => r.data),
+  // Whether Google sign-in is available, and the public client ID to use.
+  config: () => api.get("/auth/config").then((r) => r.data),
 };
+
 
 export const stocksApi = {
   list: (params) => api.get("/stocks", { params }).then((r) => r.data),

@@ -10,9 +10,11 @@
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
+import GoogleSignInButton from "../components/GoogleSignInButton";
 import { useAuth } from "../context/AuthContext";
 
 /** Mirrors the server-side rule so the two never disagree. */
+
 function passwordProblem(password) {
   if (password.length < 8) return "Password must be at least 8 characters.";
   if (!/[A-Za-z]/.test(password)) return "Password must contain a letter.";
@@ -130,9 +132,18 @@ export default function Register() {
           {submitting ? "Creating account…" : "Create account"}
         </button>
 
+        {/* The same endpoint creates the account on a first Google sign-in, so
+            the wording is "sign up" here while the behaviour is identical. */}
+        <GoogleSignInButton
+          text="signup_with"
+          onSuccess={() => navigate("/", { replace: true })}
+          onError={setError}
+        />
+
         <p className="auth-footer">
           Already registered? <Link to="/login">Sign in</Link>
         </p>
+
       </form>
     </div>
   );

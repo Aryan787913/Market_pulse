@@ -67,6 +67,12 @@ module.exports = {
   isServerless,
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "24h",
+  // Google sign-in is optional. When GOOGLE_CLIENT_ID is absent the rest of the
+  // app works exactly as before and /api/auth/google reports that the feature is
+  // not configured, rather than the server refusing to start. That keeps a fresh
+  // clone runnable without anyone first having to visit the Google console.
+  googleClientId: process.env.GOOGLE_CLIENT_ID || null,
+
   // Only these origins may call the API from a browser.
   //
   // On Vercel the frontend and the API are served from the same domain, so

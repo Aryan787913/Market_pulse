@@ -68,6 +68,22 @@ export function AuthProvider({ children }) {
     return data.user;
   }
 
+  /**
+   * Completes a Google sign-in.
+   *
+   * The ID token is passed straight to the API without being inspected here.
+   * Reading the name and email out of it in the browser would be pointless: only
+   * the server's verification decides who the user is, and the response already
+   * carries the authoritative user record.
+   */
+  async function loginWithGoogle(credential) {
+    const data = await authApi.google(credential);
+    tokenStore.set(data.token);
+    tokenStore.setUser(data.user);
+    setUser(data.user);
+    return data.user;
+  }
+
   function logout() {
     // JWTs are stateless, so "logging out" means discarding the token client
     // side. The token stays technically valid until it expires, which is why
@@ -79,7 +95,15 @@ export function AuthProvider({ children }) {
   // useMemo keeps the context value stable so consumers do not re-render on
   // every provider render.
   const value = useMemo(
-    () => ({ user, loading, login, register, logout, isAuthenticated: Boolean(user) }),
+    () => ({
+      user,
+      loading,
+      login,
+      register,
+      loginWithGoogle,
+      logout,
+      isAuthenticated: Boolean(user),
+    }),
     [user, loading]
   );
 

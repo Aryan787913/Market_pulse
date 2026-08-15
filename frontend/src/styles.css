@@ -682,7 +682,49 @@ a:hover {
   }
 }
 
+/* ---------- Google sign-in ---------- */
+/*
+ * The button itself is an iframe rendered by Google, so its interior cannot be
+ * styled from here. Only the surrounding block and the "or" divider are ours.
+ */
+.google-signin {
+  margin-top: 18px;
+}
+
+/* Kept in the tree but hidden when no client ID is configured, so the layout
+   does not shift once the /auth/config call resolves. */
+.google-signin.is-hidden {
+  display: none;
+}
+
+/* A centred label with a rule running through it, drawn with two flex lines
+   rather than a background image. */
+.google-signin-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.google-signin-divider::before,
+.google-signin-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.google-signin-button {
+  display: flex;
+  justify-content: center;
+}
+
 /* ---------- Responsive ---------- */
+
 @media (max-width: 820px) {
   .grid-2 {
     grid-template-columns: 1fr;
