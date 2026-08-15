@@ -157,16 +157,54 @@ CHECKS: list[Check] = [
 ]
 
 
+def _latest_ingestion_batch_id() -> str | None:
+    """
+    Return the batch_id of the most recent ingestion run, or None if the log is
+    empty.
+
+    Under Airflow the batch_id is threaded through from fetch_data via XCom, so
+    every check row is tied to the load it validated. A standalone run - the
+    cloud bootstrap in setup_cloud_db.py, or a manual invocation - has no XCom
+    to read from, and previously logged its results with a NULL batch_id. That
+    silently broke the dashboard: /api/pipeline/quality reports on the newest
+    batch and skips NULL rows, so the Data Quality page showed nothing at all
+    even though the checks had run and passed.
+
+    Adopting the latest ingestion batch keeps the two paths consistent, since a
+    standalone quality run is always validating whatever the last load wrote.
+    """
+    row = db.query_one(
+        """
+        SELECT batch_id
+          FROM raw.ingestion_log
+         WHERE batch_id IS NOT NULL
+         ORDER BY run_started_at DESC
+         LIMIT 1
+        """
+    )
+    return row["batch_id"] if row else None
+
+
 def run(batch_id: str | None = None) -> dict:
     """
     Execute every check, log the results, and fail loudly if any ERROR-level
     check found offending rows.
     """
+    if batch_id is None:
+        batch_id = _latest_ingestion_batch_id()
+        if batch_id is None:
+            logger.warning(
+                "No ingestion runs found; logging checks without a batch_id"
+            )
+        else:
+            logger.info("Attributing checks to latest ingestion batch %s", batch_id)
+
     logger.info("Running %s data quality checks", len(CHECKS))
 
     errors: list[str] = []
     warnings: list[str] = []
     results: list[dict] = []
+
 
     for check in CHECKS:
         row = db.query_one(check.sql)

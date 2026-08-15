@@ -1,0 +1,42 @@
+# Files excluded from the upload that creates a Vercel deployment.
+#
+# This file is necessary and is not a duplicate of .gitignore. Git-connected
+# deployments build from the commit, so .gitignore already decides what Vercel
+# can see. A CLI deployment instead uploads the working directory as it is on
+# disk, and the CLI does not consult .gitignore - so without the rules below,
+# the real .env would be packaged into the build and the local Python virtual
+# environment would be uploaded with it.
+
+# Secrets. Deployment configuration is injected as environment variables in the
+# Vercel project settings, never shipped in a file.
+.env
+.env.local
+
+# Python side of the project. The data pipeline runs in GitHub Actions, not in
+# the serverless runtime, so none of this belongs in the deployment.
+.venv/
+venv/
+__pycache__/
+*.pyc
+data_pipeline/
+dbt_marketpulse/
+database/
+requirements.txt
+setup_cloud_db.py
+docker-compose.yml
+
+# Installed by the build on Vercel, so uploading local copies only slows it down
+# and risks shipping platform-specific binaries.
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+
+# Build output. Vercel runs the build itself.
+frontend/dist/
+
+# Local tooling noise.
+.git/
+.github/
+.vscode/
+.idea/
+*.log

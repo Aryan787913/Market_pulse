@@ -38,3 +38,4 @@ airflow-webserver.pid
 .idea/
 .DS_Store
 Thumbs.db
+.vercel
