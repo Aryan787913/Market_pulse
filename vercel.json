@@ -8,14 +8,12 @@
       "memory": 1024
     }
   },
-  "//rewrites": "There is deliberately no rewrite for /api/*. api/[...path].js is a catch-all filesystem route, so Vercel already sends every /api/<anything> request to it with the original URL intact, which is what lets Express do its own routing. An explicit rewrite would now rewrite the path itself and Express would see /api/index instead of the real route. The remaining rule is the single-page-app fallback: unknown non-API paths return index.html so React Router can handle /login, /watchlist and the rest on a hard refresh.",
   "rewrites": [
     {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ],
-
   "headers": [
     {
       "source": "/assets/(.*)",
