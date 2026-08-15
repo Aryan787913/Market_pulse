@@ -243,8 +243,17 @@ to local Postgres — nothing else has to change.
 
 Push the repository to GitHub, then import it in Vercel. `vercel.json` already
 describes the build: the React app is built to `frontend/dist` and served as
-static files, and every `/api/*` request is rewritten to `api/index.js`, which
+static files, and every `/api/*` request is handled by `api/[...path].js`, which
 re-exports the same Express app used locally.
+
+The API function is a catch-all filesystem route (`[...path]`) rather than an
+`index.js` reached through a rewrite. Vercel routes an internal rewrite using its
+*destination* path, so a rule sending `/api/(.*)` to `/api/index` would hand
+Express the literal path `/api/index`, which matches none of its routes and would
+turn every API call into a 404. A catch-all route receives `/api/stocks` and
+`/api/auth/login` unchanged, so Express does its own routing exactly as it does
+locally.
+
 
 Set these environment variables in the Vercel project (Settings → Environment
 Variables):

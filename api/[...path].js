@@ -15,9 +15,20 @@
  * is exactly what Express expects, so the same routes, middleware, validation
  * and error handling serve both deployments.
  *
- * vercel.json rewrites every /api/* path to this single function. Express then
- * does its own routing internally, so /api/stocks, /api/auth/login and the rest
- * keep the paths they already had and the frontend needs no changes.
+ * Why the file is named [...path].js rather than index.js:
+ *
+ * Express does its own internal routing, so it needs to see the real request
+ * path - /api/stocks, /api/auth/login - not a rewritten one. The earlier version
+ * of this deployment used a vercel.json rewrite from /api/(.*) to /api/index,
+ * which worked only because the function still received the original path.
+ * Vercel now routes internal rewrites using the *destination* path, so Express
+ * would be handed /api/index, match none of its routes, and answer 404 to every
+ * API call.
+ *
+ * A catch-all filesystem route avoids the problem instead of working around it.
+ * The [...path] segment makes Vercel send every /api/<anything> request straight
+ * to this function with the URL untouched, so no rewrite is involved and Express
+ * routes on the path the browser actually asked for.
  */
 
 const app = require("../backend/src/app");
