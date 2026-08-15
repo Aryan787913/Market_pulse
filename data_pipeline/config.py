@@ -115,10 +115,14 @@ STOCK_SYMBOLS = [
     "ITC.NS",
     "LT.NS",
     "WIPRO.NS",
-    "TATAMOTORS.NS",
+    # Was TATAMOTORS.NS. Tata Motors demerged in 2025 and the old NSE ticker no
+    # longer resolves on Yahoo (404 "Quote not found"), so it is replaced with
+    # another large-cap automobile stock to keep the sector represented.
+    "MARUTI.NS",
     "^NSEI",
     "^BSESN",
 ]
+
 
 
 # ---------------------------------------------------------------------------

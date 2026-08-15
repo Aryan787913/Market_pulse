@@ -195,7 +195,9 @@ INSERT INTO warehouse.stocks (symbol, company_name, sector, exchange) VALUES
     ('ITC.NS',      'ITC Ltd',                      'FMCG',              'NSE'),
     ('LT.NS',       'Larsen & Toubro Ltd',          'Construction',      'NSE'),
     ('WIPRO.NS',    'Wipro Ltd',                    'Information Technology', 'NSE'),
-    ('TATAMOTORS.NS','Tata Motors Ltd',             'Automobile',        'NSE'),
+    ('MARUTI.NS',   'Maruti Suzuki India Ltd',      'Automobile',        'NSE'),
     ('^NSEI',       'NIFTY 50 Index',               'Index',             'NSE'),
     ('^BSESN',      'S&P BSE SENSEX',               'Index',             'BSE')
 ON CONFLICT (symbol) DO NOTHING;
+
+

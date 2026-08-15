@@ -3,7 +3,13 @@
 # Install:  pip install -r requirements.txt
 
 # Data extraction
-yfinance==0.2.40
+# yfinance must track Yahoo's undocumented endpoints, which change without
+# notice. 0.2.40 stopped returning any data ("possibly delisted; No timezone
+# found" for every symbol) because it still spoke to a retired endpoint; 1.6.0
+# is the version verified against the live API. It reaches Yahoo through
+# curl_cffi rather than requests, which is installed as its dependency.
+yfinance==1.6.0
+
 pandas==2.2.2
 numpy==1.26.4
 

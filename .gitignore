@@ -24,9 +24,12 @@ npm-debug.log*
 dbt_marketpulse/target/
 dbt_marketpulse/dbt_packages/
 dbt_marketpulse/logs/
+# Written by dbt on first run: a machine-local anonymous id, not project config.
+dbt_marketpulse/.user.yml
 
 # Airflow runtime
 data_pipeline/logs/
+
 airflow.db
 airflow-webserver.pid
 
