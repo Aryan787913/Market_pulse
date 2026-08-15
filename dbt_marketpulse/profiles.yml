@@ -1,0 +1,47 @@
+# Connection profile for dbt.
+#
+# Values are pulled from environment variables via env_var() so no credential is
+# ever written into the repository. The same .env that the Python pipeline uses
+# supplies these values.
+#
+# Two targets are defined because the warehouse lives in two places:
+#
+#   dev   - the local PostgreSQL instance, addressed with separate DB_* parts.
+#           This is the default, so `dbt run` during development needs no flags.
+#
+#   prod  - the hosted PostgreSQL instance (Neon), which issues one connection
+#           string instead of separate parts. dbt has no "connect by URL" option
+#           for Postgres, so the components are read from individual PG* variables
+#           that the CI workflow derives from DATABASE_URL before invoking dbt.
+#           sslmode is require because hosted providers refuse plaintext
+#           connections, and threads is lower because a free-tier database has a
+#           small connection allowance that four parallel writers can exhaust.
+#
+# Usage: dbt run --profiles-dir .              (local)
+#        dbt run --profiles-dir . --target prod  (hosted)
+
+marketpulse:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DB_HOST', 'localhost') }}"
+      port: "{{ env_var('DB_PORT', '5432') | int }}"
+      user: "{{ env_var('DB_USER', 'postgres') }}"
+      password: "{{ env_var('DB_PASSWORD') }}"
+      dbname: "{{ env_var('DB_NAME', 'marketpulse') }}"
+      schema: analytics
+      threads: 4
+      keepalives_idle: 0
+
+    prod:
+      type: postgres
+      host: "{{ env_var('PGHOST') }}"
+      port: "{{ env_var('PGPORT', '5432') | int }}"
+      user: "{{ env_var('PGUSER') }}"
+      password: "{{ env_var('PGPASSWORD') }}"
+      dbname: "{{ env_var('PGDATABASE') }}"
+      schema: analytics
+      sslmode: require
+      threads: 2
+      keepalives_idle: 0

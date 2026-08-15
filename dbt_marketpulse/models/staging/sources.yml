@@ -1,0 +1,39 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Landing zone written by the Python ingestion script. Nothing in here is
+      cleaned; it is a faithful copy of what yfinance returned.
+    schema: raw
+    tables:
+      - name: daily_prices_raw
+        description: One row per symbol per trading day, as fetched.
+        columns:
+          - name: symbol
+            description: Yahoo Finance ticker, e.g. TCS.NS
+            tests:
+              - not_null
+          - name: trade_date
+            tests:
+              - not_null
+          - name: close
+            description: Closing price. Rows with a null close are filtered in staging.
+      - name: ingestion_log
+        description: Audit row per pipeline run.
+
+  - name: warehouse
+    description: Curated zone. Reference tables live here.
+    schema: warehouse
+    tables:
+      - name: stocks
+        description: Dimension table listing the tracked stock universe.
+        columns:
+          - name: stock_id
+            tests:
+              - unique
+              - not_null
+          - name: symbol
+            tests:
+              - unique
+              - not_null

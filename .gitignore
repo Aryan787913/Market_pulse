@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+
+# Node
+node_modules/
+
+# Vercel CLI local state (contains the linked project/org ids)
+.vercel/
+
+dist/
+build/
+npm-debug.log*
+
+# Environment - never commit real credentials
+.env
+.env.local
+!.env.example
+
+# dbt build artefacts
+dbt_marketpulse/target/
+dbt_marketpulse/dbt_packages/
+dbt_marketpulse/logs/
+
+# Airflow runtime
+data_pipeline/logs/
+airflow.db
+airflow-webserver.pid
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

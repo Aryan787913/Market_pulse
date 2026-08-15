@@ -1,0 +1,115 @@
+# Local development stack for MarketPulse.
+#
+#   postgres            the warehouse (raw + warehouse + analytics schemas)
+#   airflow-init        one-shot: migrates the metadata DB and creates the admin user
+#   airflow-webserver   UI on http://localhost:8080
+#   airflow-scheduler   runs the DAG on its schedule
+#
+# Airflow uses the LocalExecutor and stores its metadata in a separate
+# "airflow" database inside the same Postgres instance, keeping Airflow's
+# internal tables out of the project's warehouse.
+#
+# Start:  docker compose up -d
+# Stop:   docker compose down          (add -v to also wipe the database volume)
+#
+# Security note: the credentials below are development defaults supplied through
+# .env. They are fine for a local machine but must be replaced before this stack
+# is exposed on any network, since the Airflow UI would otherwise be reachable
+# with a well-known password.
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.2-python3.11
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+      postgresql+psycopg2://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Kolkata
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    # Makes the pipeline modules importable from inside the DAG file.
+    PYTHONPATH: /opt/airflow/data_pipeline
+    # Connection details for the warehouse, read by config.py.
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_NAME: ${DB_NAME:-marketpulse}
+    DB_USER: ${DB_USER:-postgres}
+    DB_PASSWORD: ${DB_PASSWORD}
+    BACKFILL_DAYS: ${BACKFILL_DAYS:-365}
+    INCREMENTAL_DAYS: ${INCREMENTAL_DAYS:-7}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # dbt Postgres adapter is not in the base image, so install it at start-up.
+    _PIP_ADDITIONAL_REQUIREMENTS: "yfinance==0.2.40 dbt-core==1.8.2 dbt-postgres==1.8.2"
+  volumes:
+    - ./data_pipeline/dags:/opt/airflow/dags
+    - ./data_pipeline:/opt/airflow/data_pipeline
+    - ./dbt_marketpulse:/opt/airflow/dbt_marketpulse
+    - ./data_pipeline/logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: marketpulse-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-marketpulse}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Files in this folder run once, in alphabetical order, on first start.
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/init_airflow_db.sql:/docker-entrypoint-initdb.d/02_airflow_db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: marketpulse-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@marketpulse.local || true
+    restart: on-failure
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: marketpulse-airflow-web
+    command: webserver
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: marketpulse-airflow-scheduler
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

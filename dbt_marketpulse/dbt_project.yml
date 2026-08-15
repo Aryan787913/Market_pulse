@@ -1,0 +1,31 @@
+# dbt project configuration for MarketPulse.
+#
+# Layering used here:
+#   staging/  -> light cleaning of the raw landing zone (views, cheap to rebuild)
+#   marts/    -> business metrics consumed by the API (views + publish hooks)
+#
+# The models are materialised as views inside the "analytics" schema. Each
+# publish model then upserts its result into the constrained tables defined in
+# database/schema.sql, so foreign keys and CHECK constraints stay in force.
+
+name: "marketpulse"
+version: "1.0.0"
+config-version: 2
+
+profile: "marketpulse"
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  marketpulse:
+    +schema: analytics
+    staging:
+      +materialized: view
+    marts:
+      +materialized: view

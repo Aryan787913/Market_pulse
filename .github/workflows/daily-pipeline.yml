@@ -1,0 +1,188 @@
+# MarketPulse daily pipeline - hosted orchestration.
+#
+# This workflow is the deployed counterpart of the Airflow DAG in
+# data_pipeline/dags/marketpulse_dag.py. Airflow needs a scheduler process and a
+# metadata database running continuously, which no serverless host provides, so
+# in the cloud deployment GitHub Actions supplies the scheduling and the DAG's
+# task sequence is expressed as ordered steps in a single job.
+#
+# The mapping to the DAG is deliberate and one-to-one:
+#
+#   DAG task            workflow step
+#   ----------------    -------------------------------------------------
+#   fetch_data          Extract into the raw zone
+#   run_dbt_models      Build dbt models and tests
+#   run_quality_checks  Run the SQL quality gate
+#   pipeline_summary    Print the run summary
+#   notify_on_failure   Report failure (if: failure())
+#
+# Behaviour preserved from the DAG:
+#   * schedule matches "0 19 * * 1-5" IST. GitHub cron is UTC only, so 19:00 IST
+#     is written as 13:30 UTC.
+#   * concurrency replaces max_active_runs=1, so two runs never write the same
+#     rows at once.
+#   * steps run in order and the job stops at the first failure, which is what
+#     the DAG's linear dependency chain does.
+#   * retries: the DAG retried a failed task twice. Here the fetch step is
+#     retried in-process by the pipeline's own MAX_RETRIES logic, and the whole
+#     run can be replayed with workflow_dispatch.
+
+name: MarketPulse Daily Pipeline
+
+on:
+  schedule:
+    # 13:30 UTC = 19:00 IST, Monday-Friday, after the Indian market closes.
+    - cron: "30 13 * * 1-5"
+  # Lets the pipeline be triggered by hand from the Actions tab, which is how the
+  # initial history backfill is run.
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Fetch full history instead of the usual short window"
+        type: boolean
+        default: false
+
+# Never let a scheduled run and a manual run write concurrently.
+concurrency:
+  group: marketpulse-pipeline
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # The only secret this workflow needs. Everything else is derived from it.
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # Selects the hosted connection block in dbt_marketpulse/profiles.yml.
+      DBT_TARGET: prod
+      # First run against an empty database always pulls a year of history.
+      BACKFILL_DAYS: "365"
+      # A manual backfill widens the trailing window to a year so gaps left by an
+      # outage are refilled; scheduled runs keep the short overlap window.
+      # Both branches produce a non-empty value because config.py calls int() on
+      # this, and an empty string would raise instead of falling back.
+      INCREMENTAL_DAYS: ${{ inputs.backfill && '365' || '7' }}
+      # fetch_data.py and quality_checks.py import their siblings flatly
+      # ("import db", "from config import ..."), which is how Airflow loaded them
+      # from its dags folder. Putting data_pipeline on the import path keeps those
+      # imports working when the scripts are launched from the repository root,
+      # so no source file needs to change to run in CI.
+      PYTHONPATH: data_pipeline
+
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install pipeline dependencies
+        # Airflow is deliberately excluded: this workflow replaces it as the
+        # scheduler, and installing it would add several minutes per run for
+        # code that is never imported here.
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            yfinance==0.2.40 pandas==2.2.2 numpy==1.26.4 \
+            psycopg2-binary==2.9.9 SQLAlchemy==2.0.30 python-dotenv==1.0.1 \
+            dbt-core==1.8.2 dbt-postgres==1.8.2
+
+      - name: Verify the database is reachable
+        # Fails fast with a clear message if the secret is missing or the
+        # database is asleep, rather than failing midway through ingestion.
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL secret is not set. Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          python -c "
+          import psycopg2
+          from data_pipeline import config
+          print('Target:', config.describe_target())
+          with psycopg2.connect(**config.DB_CONFIG) as conn:
+              with conn.cursor() as cur:
+                  cur.execute('SELECT version()')
+                  print('Connected:', cur.fetchone()[0][:40])
+          "
+
+      - name: Split DATABASE_URL into PG* variables for dbt
+        # dbt-postgres has no option to connect by URL, so profiles.yml reads the
+        # individual components. They are written to $GITHUB_ENV rather than
+        # echoed, and the password is masked with ::add-mask:: so it cannot
+        # appear in the log even if a later step fails and dumps its environment.
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          from data_pipeline import config
+          c = config.DB_CONFIG
+          print(f"::add-mask::{c['password']}")
+          print(f"PGHOST={c['host']}")
+          print(f"PGPORT={c['port']}")
+          print(f"PGUSER={c['user']}")
+          print(f"PGPASSWORD={c['password']}")
+          print(f"PGDATABASE={c['dbname']}")
+          PY
+
+      # --- DAG task: fetch_data -------------------------------------------
+      - name: Fetch market data into the raw zone
+        id: fetch
+        run: python -m data_pipeline.fetch_data
+
+      # --- DAG task: run_dbt_models ---------------------------------------
+      - name: Build dbt models and run their tests
+        working-directory: dbt_marketpulse
+        # dbt build = run models then execute their schema tests in dependency
+        # order, the same command the BashOperator issued in the DAG.
+        run: dbt build --profiles-dir . --target prod --no-use-colors
+
+      # --- DAG task: run_quality_checks -----------------------------------
+      - name: Run the data quality gate
+        run: python -m data_pipeline.quality_checks
+
+      # --- DAG task: pipeline_summary -------------------------------------
+      - name: Print the run summary
+        run: |
+          python - <<'PY'
+          import psycopg2
+          from data_pipeline import config
+
+          with psycopg2.connect(**config.DB_CONFIG) as conn:
+              with conn.cursor() as cur:
+                  cur.execute("""
+                      SELECT batch_id, status, symbols_ok, symbols_failed,
+                             rows_inserted, started_at
+                      FROM raw.pipeline_runs
+                      ORDER BY started_at DESC
+                      LIMIT 1
+                  """)
+                  row = cur.fetchone()
+
+                  cur.execute("SELECT COUNT(*) FROM raw.daily_prices_raw")
+                  total_rows = cur.fetchone()[0]
+
+          print("===== MarketPulse run summary =====")
+          if row:
+              print(f"batch_id       : {row[0]}")
+              print(f"ingest status  : {row[1]}")
+              print(f"symbols ok     : {row[2]}")
+              print(f"symbols failed : {row[3]}")
+              print(f"rows upserted  : {row[4]}")
+          print(f"rows in raw    : {total_rows}")
+          print("===================================")
+          PY
+
+      # --- DAG task: notify_on_failure ------------------------------------
+      - name: Report failure
+        if: failure()
+        # Mirrors the DAG's ONE_FAILED task: it only runs when something above
+        # it broke, and it names the run so the cause can be found quickly.
+        # A GitHub Actions failure already emails the repository owner, so no
+        # external webhook credential is needed.
+        run: |
+          echo "::error::MarketPulse pipeline FAILED for run ${{ github.run_id }}."
+          echo "Inspect the failing step above, then re-run from the Actions tab."

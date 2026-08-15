@@ -1,0 +1,25 @@
+# Python dependencies for the MarketPulse data pipeline.
+# Versions are pinned so the project builds identically on any machine.
+# Install:  pip install -r requirements.txt
+
+# Data extraction
+yfinance==0.2.40
+pandas==2.2.2
+numpy==1.26.4
+
+# Database
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.30
+
+# Configuration
+python-dotenv==1.0.1
+
+# Orchestration
+apache-airflow==2.9.2
+
+# Transformation
+dbt-core==1.8.2
+dbt-postgres==1.8.2
+
+# Testing
+pytest==8.2.2

@@ -1,0 +1,51 @@
+version: 2
+
+models:
+  - name: mart_daily_prices
+    description: >
+      Cleaned, deduplicated price history. The post_hook publishes these rows
+      into warehouse.daily_prices via an idempotent UPSERT.
+    columns:
+      - name: stock_id
+        description: Foreign key to warehouse.stocks.
+        tests:
+          - not_null
+          - relationships:
+              to: source('warehouse', 'stocks')
+              field: stock_id
+      - name: trade_date
+        tests:
+          - not_null
+      - name: close
+        description: Closing price. Never null, always positive after staging.
+        tests:
+          - not_null
+
+  - name: mart_stock_metrics
+    description: >
+      Derived analytics per stock per day: daily return, 7/30-day moving
+      averages, 7-day volatility and 7-day average volume.
+    tests:
+      # Enforces the grain of the table: one row per stock per trading day.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - stock_id
+            - trade_date
+    columns:
+      - name: stock_id
+        tests:
+          - not_null
+      - name: trade_date
+        tests:
+          - not_null
+      - name: daily_return
+        description: >
+          Percent change vs the previous close. Null on the first day of a
+          series because there is no prior row to compare against.
+      - name: moving_avg_7d
+        tests:
+          - not_null
+      - name: volatility_7d
+        description: >
+          Sample standard deviation of daily returns over a trailing 7-row
+          window. Null for the first two rows of a series.

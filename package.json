@@ -1,0 +1,28 @@
+{
+  "name": "marketpulse",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Root manifest for the Vercel deployment: installs the API's runtime dependencies and builds the React frontend",
+  "type": "commonjs",
+  "scripts": {
+    "build": "npm install --prefix frontend && npm run build --prefix frontend",
+    "dev:api": "npm run dev --prefix backend",
+    "dev:web": "npm run dev --prefix frontend"
+  },
+  "//": "These are the dependencies of the Express app in backend/src. Vercel builds serverless functions from the repository root, so it installs from this file rather than backend/package.json. The versions are kept identical to backend/package.json so local and deployed runs execute the same code.",
+  "dependencies": {
+    "bcryptjs": "2.4.3",
+    "cors": "2.8.5",
+    "dotenv": "16.4.5",
+    "express": "4.19.2",
+    "express-rate-limit": "7.3.1",
+    "express-validator": "7.1.0",
+    "helmet": "7.1.0",
+    "jsonwebtoken": "9.0.2",
+    "morgan": "1.10.0",
+    "pg": "8.12.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
